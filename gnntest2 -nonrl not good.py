@@ -26,6 +26,7 @@ class ConvergeToTargetGNN(torch.nn.Module):
         x = F.relu(self.conv1(x, edge_index))
         x = F.relu(self.conv2(x, edge_index))
         dx = self.conv3(x, edge_index)
+        # dx = torch.tanh(dx)
         return dx
 
 gnn_model = ConvergeToTargetGNN(in_channels=9).to(device)
@@ -51,7 +52,7 @@ def build_graph(positions, velocities, target, threshold=55.0):
     return Data(x=x, edge_index=edge_index)
 
 class DummyEnv:
-    def __init__(self, num_agents=55):
+    def __init__(self, num_agents=33):
         self.s_agents = num_agents
         self.reset()
 
@@ -93,46 +94,20 @@ class DummyEnv:
             optimizer.zero_grad()
             dx = gnn_model(x, edge_index)
             dx_drones = dx[:N]
-
-            distances = torch.norm(pos_tensor - target_tensor.expand_as(pos_tensor), dim=1)
-            max_steps = torch.clamp(distances, max=1.0)
-
-            dx_clamped = torch.zeros_like(dx_drones)
-            for i in range(N):
-                dx_clamped[i] = torch.clamp(dx_drones[i], min=-max_steps[i].item(), max=max_steps[i].item())
-
-            next_positions = pos_tensor + dx_clamped
-
-            distances_next = torch.norm(next_positions - target_tensor.expand_as(next_positions), dim=1)
-            loss = distances_next.sum()
-
+            next_positions = pos_tensor + dx_drones
+            # loss = F.mse_loss(next_positions, target_tensor.expand_as(next_positions))
+            loss = F.mse_loss(next_positions, target_tensor.expand_as(next_positions))
             loss.backward()
             optimizer.step()
             current_loss = loss.item()
-
-            dx_drones = dx_clamped.detach()
+            dx_drones = dx_drones.detach().cpu().numpy()
         else:
             with torch.no_grad():
                 dx = gnn_model(x, edge_index)
-                dx_drones = dx[:N]
-
-                distances = torch.norm(pos_tensor - target_tensor.expand_as(pos_tensor), dim=1)
-                max_steps = torch.clamp(distances, max=1.0)
-
-                dx_clamped = torch.zeros_like(dx_drones)
-                for i in range(N):
-                    dx_clamped[i] = torch.clamp(dx_drones[i], min=-max_steps[i].item(), max=max_steps[i].item())
-
-                dx_drones = dx_clamped
+                dx_drones = dx[:N].cpu().numpy()
                 current_loss = None
 
-        self.positions += dx_drones.cpu().numpy()
-
-        epsilon = 0.1
-        for i in range(N):
-            if np.linalg.norm(self.positions[i] - self.target) < epsilon:
-                self.positions[i] = self.target.copy()
-
+        self.positions += dx_drones
         pos_tensor = torch.tensor(self.positions, dtype=torch.float)
         self.distances = torch.cdist(pos_tensor, pos_tensor)
 
@@ -155,7 +130,7 @@ controls_text = fig.text(
 
 info_box = fig.text(
     0.01, 0.91,
-    "",
+    "",  # filled in animation
     fontsize=10,
     bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray", alpha=0.5)
 )
